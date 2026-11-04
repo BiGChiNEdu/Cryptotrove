@@ -1,0 +1,25 @@
+name: Deploy contract
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install NEAR tools
+        run: |
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/latest/download/cargo-near-installer.sh | sh
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/near-cli-rs/releases/latest/download/near-cli-rs-installer.sh | sh
+      - name: Build contract
+        working-directory: contract
+        run: cargo near build non-reproducible-wasm
+      - name: Create account and deploy
+        working-directory: contract
+        run: |
+          WASM=$(ls target/near/*.wasm | head -n1)
+          near account create-account sponsor-by-faucet-service cryptotrove.testnet autogenerate-new-keypair save-to-legacy-keychain network-config testnet create
+          near contract deploy cryptotrove.testnet use-file "$WASM" with-init-call new json-args '{}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' network-config testnet sign-with-legacy-keychain send
