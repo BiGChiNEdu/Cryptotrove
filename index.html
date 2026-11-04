@@ -75,9 +75,8 @@ input,textarea{width:100%;font:inherit;padding:10px;border:1px solid var(--line)
 </main>
 
 <script type="module">
-import { setupWalletSelector } from "https://esm.sh/@near-wallet-selector/core@8.9.13";
-import { setupMeteorWallet } from "https://esm.sh/@near-wallet-selector/meteor-wallet@8.9.13";
-
+import { setupWalletSelector } from "https://esm.sh/@near-wallet-selector/core@8.9.13?deps=near-api-js@4";
+import { setupMeteorWallet } from "https://esm.sh/@near-wallet-selector/meteor-wallet@8.9.13?deps=near-api-js@4";
 const CONTRACT = "cryptotrove.testnet";
 const RPCS = ["https://rpc.testnet.near.org", "https://test.rpc.fastnear.com"];
 const DEMO = { period: 120, grace: 120 };
