@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CryptoTrove: private vault with a next-of-kin switch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600&family=Newsreader:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef0f2;--ink:#14202b;--mute:#5b6975;--line:#cfd6dc;--card:#fff;--steel:#2f5d8a;--ok:#2e7d5b;--warn:#c98a1b;--bad:#a23b2a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Manrope,system-ui,sans-serif}
+main{max-width:760px;margin:0 auto;padding:28px 18px 80px}
+h1,h2{font-family:Newsreader,Georgia,serif;font-weight:600;margin:0}
+h1{font-size:clamp(30px,6vw,44px);line-height:1.1}
+h2{font-size:22px;margin-bottom:10px}
+p{margin:.4em 0}.mute{color:var(--mute)}.small{font-size:14px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:26px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-top:18px}
+button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:11px 18px;background:var(--steel);color:#fff;cursor:pointer}
+button.alt{background:transparent;color:var(--steel);border:1px solid var(--steel)}
+button.danger{background:transparent;color:var(--bad);border:1px solid var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #8db4d9;outline-offset:2px}
+label{display:block;font-weight:600;margin:14px 0 4px}
+input,textarea{width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.track{display:flex;height:16px;border-radius:8px;overflow:hidden;margin:18px 0 6px;position:relative}
+.seg{height:100%}.s1{background:var(--ok)}.s2{background:var(--warn)}.s3{background:var(--bad)}
+.pin{position:absolute;top:-5px;width:4px;height:26px;background:var(--ink);border-radius:2px;transition:left .4s}
+.legend{display:flex;justify-content:space-between;font-size:13px;color:var(--mute)}
+.big{font-family:Newsreader,serif;font-size:clamp(34px,8vw,54px);line-height:1.05;margin:6px 0}
+.badge{display:inline-block;padding:3px 12px;border-radius:99px;color:#fff;font-weight:600;font-size:14px}
+.b-Active{background:var(--ok)}.b-Grace{background:var(--warn)}.b-Released{background:var(--bad)}
+.msg{margin-top:12px;padding:10px 12px;border-radius:8px;background:#e6eef6;font-size:14px;word-break:break-word}
+.msg.err{background:#f6e4e0;color:var(--bad)}
+.hidden{display:none}
+.check{display:flex;gap:8px;align-items:center;font-weight:400;margin:14px 0 0}.check input{width:auto}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div><h1>CryptoTrove</h1><p class="mute">A private vault for your next of kin, with a switch you can cancel.</p></div>
+  <div><span id="who" class="small mute"></span> <button id="connect">Connect wallet</button> <button id="logout" class="alt hidden">Disconnect</button></div>
+</header>
+
+<section id="vaultCard" class="card hidden"></section>
+
+<section id="createCard" class="card hidden">
+  <h2>Create your Legacy Vault</h2>
+  <p class="mute small">Your note is locked in this browser before it goes anywhere. Only a locked copy and a fingerprint of the email reach the blockchain.</p>
+  <label for="note">Recovery note (max 120 characters)</label>
+  <textarea id="note" rows="3" maxlength="120" placeholder="For example: where your recovery phrase is kept"></textarea>
+  <label for="pass">Passphrase for your next of kin</label>
+  <input id="pass" type="password" autocomplete="off" placeholder="Share this with them in person, never by email">
+  <label for="email">Next of kin email</label>
+  <input id="email" type="email" placeholder="name@example.com">
+  <label class="check"><input id="demo" type="checkbox" checked> Demo mode: 2-minute check-in and 2-minute grace period</label>
+  <p class="small mute">Real mode uses a 12-month check-in and a 90-day grace period.</p>
+  <div class="row"><button id="create">Create vault</button></div>
+</section>
+
+<section class="card">
+  <h2>Claim a vault</h2>
+  <p class="mute small">For next of kin. Works only after the owner's grace period has ended.</p>
+  <label for="owner">Owner's NEAR account</label>
+  <input id="owner" placeholder="owner.testnet">
+  <label for="cpass">Passphrase you were given</label>
+  <input id="cpass" type="password" autocomplete="off">
+  <div class="row"><button id="claim" class="alt">Open vault</button></div>
+  <div id="claimOut"></div>
+</section>
+<p id="msg" class="msg hidden" role="status"></p>
+</main>
+
+<script type="module">
+import { setupWalletSelector } from "https://esm.sh/@near-wallet-selector/core@8.9.13";
+import { setupMeteorWallet } from "https://esm.sh/@near-wallet-selector/meteor-wallet@8.9.13";
+
+const CONTRACT = "cryptotrove.testnet";
+const RPCS = ["https://rpc.testnet.near.org", "https://test.rpc.fastnear.com"];
+const DEMO = { period: 120, grace: 120 };
+const REAL = { period: 31536000, grace: 7776000 };
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder(), dec = new TextDecoder();
+let selector, account = null, vault = null, timer = null;
+
+function say(text, err) { const m = $("msg"); m.textContent = text; m.className = "msg" + (err ? " err" : ""); }
+
+// ---------- chain ----------
+async function view(method, args) {
+  const body = JSON.stringify({ jsonrpc: "2.0", id: "1", method: "query", params: { request_type: "call_function", finality: "final", account_id: CONTRACT, method_name: method, args_base64: btoa(JSON.stringify(args)) } });
+  let last;
+  for (const rpc of RPCS) {
+    try {
+      const j = await (await fetch(rpc, { method: "POST", headers: { "content-type": "application/json" }, body })).json();
+      if (j.result && j.result.result) return JSON.parse(dec.decode(new Uint8Array(j.result.result)));
+      last = new Error(JSON.stringify(j.error || j));
+    } catch (e) { last = e; }
+  }
+  throw last;
+}
+async function send(methodName, args) {
+  const w = await selector.wallet();
+  return w.signAndSendTransaction({ receiverId: CONTRACT, actions: [{ type: "FunctionCall", params: { methodName, args, gas: "30000000000000", deposit: "0" } }] });
+}
+
+// ---------- crypto (runs in the browser) ----------
+const b64 = (u) => btoa(String.fromCharCode(...u));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+async function deriveKey(pass, salt) {
+  const base = await crypto.subtle.importKey("raw", enc.encode(pass), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+async function seal(text, pass) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveKey(pass, salt), enc.encode(text)));
+  const out = new Uint8Array(28 + ct.length); out.set(salt); out.set(iv, 16); out.set(ct, 28);
+  return b64(out);
+}
+async function unseal(s, pass) {
+  const u = unb64(s);
+  return dec.decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: u.slice(16, 28) }, await deriveKey(pass, u.slice(0, 16)), u.slice(28)));
+}
+async function sha256hex(t) { return [...new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(t.trim().toLowerCase())))].map((b) => b.toString(16).padStart(2, "0")).join(""); }
+
+// ---------- vault view ----------
+function fmt(s) {
+  s = Math.max(0, Math.floor(s));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return (d ? d + "d " : "") + (d || h ? h + "h " : "") + m + "m " + sec + "s";
+}
+function status(v, now) {
+  if (now < v.grace_starts_at_secs) return "Active";
+  if (now < v.release_at_secs) return "Grace";
+  return "Released";
+}
+function drawVault() {
+  const card = $("vaultCard");
+  if (!vault) { card.classList.add("hidden"); $("createCard").classList.toggle("hidden", !account); return; }
+  $("createCard").classList.add("hidden"); card.classList.remove("hidden");
+  const now = Date.now() / 1000, st = status(vault, now);
+  const total = vault.check_in_period_secs + vault.grace_period_secs;
+  const pos = Math.min(100, Math.max(0, (now - vault.last_check_in_secs) / total * 100));
+  const w1 = vault.check_in_period_secs / total * 100;
+  const lines = {
+    Active: ["Next stage: grace period starts in", vault.grace_starts_at_secs - now, "Check in any time to reset the clock."],
+    Grace: ["Release to next of kin in", vault.release_at_secs - now, "You missed a check-in. Check in now to cancel the transfer."],
+    Released: ["Released", 0, "The grace period ended. The vault now belongs to your next of kin."]
+  }[st];
+  card.innerHTML = `<h2>Your Legacy Vault <span class="badge b-${st}">${st}</span></h2>
+  <p class="mute small">${lines[0]}</p><div class="big">${st === "Released" ? "Final" : fmt(lines[1])}</div>
+  <div class="track"><div class="seg s1" style="width:${w1}%"></div><div class="seg s2" style="width:${100 - w1}%"></div><div class="pin" style="left:calc(${pos}% - 2px)"></div></div>
+  <div class="legend"><span>Active</span><span>Grace period</span><span>Released</span></div>
+  <p>${lines[2]}</p>
+  <div class="row"><button id="checkin" ${st === "Released" ? "disabled" : ""}>${st === "Grace" ? "Cancel transfer (check in)" : "I'm here (check in)"}</button><button id="del" class="danger" ${st === "Released" ? "disabled" : ""}>Delete vault</button></div>`;
+  $("checkin").onclick = () => act("check_in", {}, "Checked in. The countdown has restarted.");
+  $("del").onclick = () => confirm("Delete your vault? This cannot be undone.") && act("delete_vault", {}, "Vault deleted.");
+}
+async function refresh() {
+  clearInterval(timer);
+  vault = account ? await view("get_vault", { owner: account }).catch((e) => { say("Could not read the contract: " + e.message, true); return null; }) : null;
+  drawVault();
+  if (vault) timer = setInterval(drawVault, 1000);
+}
+async function act(method, args, done) {
+  try { say("Waiting for your wallet to approve…"); await send(method, args); say(done); setTimeout(refresh, 1500); }
+  catch (e) { say("Not completed: " + (e.message || e), true); }
+}
+
+// ---------- wallet ----------
+function setAccount() {
+  const a = selector.store.getState().accounts.find((x) => x.active);
+  account = a ? a.accountId : null;
+  $("who").textContent = account || "";
+  $("connect").classList.toggle("hidden", !!account);
+  $("logout").classList.toggle("hidden", !account);
+}
+async function init() {
+  selector = await setupWalletSelector({ network: "testnet", modules: [setupMeteorWallet()] });
+  selector.store.observable.subscribe(() => { setAccount(); refresh(); });
+  setAccount(); refresh();
+}
+$("connect").onclick = async () => {
+  try { const w = await selector.wallet("meteor-wallet"); await w.signIn({ contractId: CONTRACT, accounts: [] }); }
+  catch (e) { say("Wallet connection failed: " + (e.message || e), true); }
+};
+$("logout").onclick = async () => { const w = await selector.wallet(); await w.signOut(); };
+
+$("create").onclick = async () => {
+  const note = $("note").value.trim(), pass = $("pass").value, email = $("email").value.trim();
+  if (!note || !pass || !email) return say("Fill in the note, the passphrase and the email.", true);
+  const t = $("demo").checked ? DEMO : REAL;
+  try {
+    const pointer = await seal(note, pass);
+    if (pointer.length > 256) return say("The note is too long once locked. Shorten it.", true);
+    await act("create_vault", { check_in_period_secs: t.period, grace_period_secs: t.grace, encrypted_pointer: pointer, beneficiary_hash: await sha256hex(email) }, "Vault created.");
+  } catch (e) { say("Could not create the vault: " + (e.message || e), true); }
+};
+$("claim").onclick = async () => {
+  const owner = $("owner").value.trim(), out = $("claimOut");
+  out.textContent = "";
+  try {
+    const p = await view("get_released_package", { owner });
+    if (!p) return say("Nothing to claim. The vault does not exist or has not been released yet.", true);
+    const text = await unseal(p, $("cpass").value);
+    say("Vault opened.");
+    out.className = "msg"; out.textContent = text;
+  } catch (e) { say("Could not open it. Check the account name and passphrase.", true); }
+};
+
+init().catch((e) => say("Could not start the wallet connection: " + e.message, true));
+</script>
+</body>
+</html>
