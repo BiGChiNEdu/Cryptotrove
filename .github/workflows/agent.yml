@@ -1,0 +1,32 @@
+name: Agent
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: agent
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install mail library
+        run: npm install nodemailer@6
+      - name: Run agent
+        run: node agent/agent.mjs
+        env:
+          NEAR_AI_API_KEY: ${{ secrets.NEAR_AI_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          VAULT_CONTACTS: ${{ secrets.VAULT_CONTACTS }}
+      - name: Save status
+        run: |
+          git config user.name "cryptotrove-agent"
+          git config user.email "agent@users.noreply.github.com"
+          git add agent/status.json
+          if ! git diff --cached --quiet; then git commit -m "agent: update status" && git push; fi
